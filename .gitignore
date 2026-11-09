@@ -3,3 +3,17 @@ __pycache__/
 .venv/
 .vscode/
 .DS_Store
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+docs/_build/
+
+# Generated outputs: rerun the scripts to recreate them
+toy_problems/*.png
+toy_problems/*.gif
+earth_kernels/*.png
+earth_kernels/*.npz
+
+# Personal notes
+TODO
