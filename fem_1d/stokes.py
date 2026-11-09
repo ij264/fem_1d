@@ -3,14 +3,14 @@ to one spherical-harmonic degree l, and its adjoint for traction observables.
 
 Fields are the radial and tangential velocity u = (U, V), the pressure P, and
 the radial tractions T_b, T_c on the outer and inner boundaries, which hold
-U(b) = U(c) = 0. With L = l (l + 1), the strain pairing of two flows is
+U(b) = U(c) = 0. With L = l (l + 1), the strain pairing of two flows is::
 
     B(a, b) = U_a' U_b' + F_a F_b / 2 + L X_a X_b / 2 + L (L - 2) V_a V_b / (2 r^2)
               - (div a)(div b) / 3,
 
     F = (2 U - L V) / r,   X = V' - V / r + U / r,   div a = U_a' + F_a.
 
-Forward weak form, for all test fields (u~, P~, T~_b, T~_c):
+Forward weak form, for all test fields (u~, P~, T~_b, T~_c)::
 
     int 2 eta r^2 B(u, u~) dr - int r^2 P div u~ dr
       - int r^2 P~ rho0 [div u + kappa U / r] dr
@@ -19,7 +19,7 @@ Forward weak form, for all test fields (u~, P~, T~_b, T~_c):
 
 with f the radial body force (e.g. -g drho). The observable is
 J = j_b T_b + j_c T_c, and the adjoint weak form is: find
-(u+, P+, lam_b, lam_c) such that, for all (u~, P~, T~_b, T~_c),
+(u+, P+, lam_b, lam_c) such that, for all (u~, P~, T~_b, T~_c)::
 
     int 2 eta r^2 B(u~, u+) dr - int r^2 P~ div u+ dr
       - int r^2 P+ rho0 [div u~ + kappa U~ / r] dr
@@ -31,7 +31,7 @@ fields: the rows tested by T~ say U(b) = U(c) = 0 in the forward problem and
 -b^2 U+(b) = j_b, c^2 U+(c) = j_c in the adjoint, which are applied as
 Dirichlet conditions (:func:`no_flow`, :func:`adjoint_constraints`). The
 traction that holds each one comes back from the reaction there
-(:func:`tractions`). Viscosity is tagged as the parameter "eta", so
+(:func:`tractions`). Viscosity is tagged as the parameter "eta", so that::
 
     dJ = int K_eta deta dr,   K_eta = -2 r^2 B(u, u+),
 

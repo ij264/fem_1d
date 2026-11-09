@@ -4,6 +4,8 @@ Every function takes arrays, builds its figure under STYLE, and returns it;
 saving and showing are left to the caller.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable, Sequence
 
 import matplotlib.pyplot as plt

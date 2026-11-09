@@ -1,7 +1,9 @@
 """Weak-form assembly for one field or several coupled fields in 1D.
 
-A bilinear form is a sum of Terms
+A bilinear form is a sum of Terms::
+
     a(u, v) = sum_t  int c_t(x) d^{p_t} u / dx^{p_t} * d^{q_t} v / dx^{q_t} dx
+
 with u a trial field and v a test field (possibly different fields and degrees).
 A linear form is a sum of LoadTerms  l(v) = int f(x) d^q v / dx^q dx.
 
@@ -241,8 +243,8 @@ def field_at_quadrature(
     ----------
     space : FunctionSpace
         Space of the field.
-    values : ndarray, shape (n_dofs,)
-        The field's dof values (e.g. ``solution["U"]``).
+    values : ndarray, shape (N,)
+        The field's dof values, N = ``space.n_dofs`` (e.g. ``solution["U"]``).
     quad : ReferenceElement
         GLL rule giving the points.
     d : {0, 1}, default 0
@@ -426,48 +428,48 @@ def assemble_system(
 ):
     """Assemble a bilinear form into a global sparse matrix.
 
-        Parameters
-        ----------
-        spaces : FunctionSpace or dict of str to FunctionSpace
-            One space (field "u") or several fields on the same element end points.
-            Fields are stacked in dict order (see :func:`dof_slices`).
-        terms : sequence of Term or PointTerm
-            Terms of the bilinear form. Terms on the same pair of fields add up.
-        params : dict of str to callable or float, optional
-            Model parameters m(x) for terms tagged with ``param``, and the
-            argument passed to callable point-term values.
+    Parameters
+    ----------
+    spaces : FunctionSpace or dict of str to FunctionSpace
+        One space (field "u") or several fields on the same element end points.
+        Fields are stacked in dict order (see :func:`dof_slices`).
+    terms : sequence of Term or PointTerm
+        Terms of the bilinear form. Terms on the same pair of fields add up.
+    params : dict of str to callable or float, optional
+        Model parameters m(x) for terms tagged with ``param``, and the
+        argument passed to callable point-term values.
 
-        Returns
-        -------
-        A : scipy.sparse.csr_array, shape (N, N)
-            Global matrix; row = test dof, column = trial dof, N = total dofs.
-        slices : dict of str to slice
-            Each field's block of rows and columns, as from :func:`dof_slices`.
+    Returns
+    -------
+    A : scipy.sparse.csr_array, shape (N, N)
+        Global matrix; row = test dof, column = trial dof, N = total dofs.
+    slices : dict of str to slice
+        Each field's block of rows and columns, as from :func:`dof_slices`.
 
-        Raises
-        ------
-        ValueError
-            If the fields' meshes differ, a term asks for a derivative above 1, or
-            a point term is not at a node.
-        KeyError
-            If a term names a field not in ``spaces``, or a parameter not in
-            ``params``.
+    Raises
+    ------
+    ValueError
+        If the fields' meshes differ, a term asks for a derivative above 1, or
+        a point term is not at a node.
+    KeyError
+        If a term names a field not in ``spaces``, or a parameter not in
+        ``params``.
 
-        Examples
-        --------
-        Solve -u'' = 2 with u(0) = u(1) = 0 by hand (what :class:`Problem` does
+    Examples
+    --------
+    Solve -u'' = 2 with u(0) = u(1) = 0 by hand (what :class:`Problem` does
     for you); degree 2 reproduces the exact solution x(1 - x) to rounding:
 
-        >>> import numpy as np
-        >>> from scipy.sparse.linalg import spsolve
-        >>> s = FunctionSpace.build(np.linspace(0, 1, 4), 2)
-        >>> A, _ = assemble_system(s, [Term(lambda x: 1.0, 1, 1)])
-        >>> b = assemble_load(s, [LoadTerm(lambda x: 2.0)])
-        >>> inner = slice(1, -1)  # drop the fixed end dofs
-        >>> u = np.zeros(s.n_dofs)
-        >>> u[inner] = spsolve(A[inner, inner].tocsc(), b[inner])
-        >>> bool(np.allclose(u, s.x * (1 - s.x)))
-        True
+    >>> import numpy as np
+    >>> from scipy.sparse.linalg import spsolve
+    >>> s = FunctionSpace.build(np.linspace(0, 1, 4), 2)
+    >>> A, _ = assemble_system(s, [Term(lambda x: 1.0, 1, 1)])
+    >>> b = assemble_load(s, [LoadTerm(lambda x: 2.0)])
+    >>> inner = slice(1, -1)  # drop the fixed end dofs
+    >>> u = np.zeros(s.n_dofs)
+    >>> u[inner] = spsolve(A[inner, inner].tocsc(), b[inner])
+    >>> bool(np.allclose(u, s.x * (1 - s.x)))
+    True
     """
     spaces = _as_spaces(spaces)
     slices = dof_slices(spaces)

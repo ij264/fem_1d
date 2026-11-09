@@ -19,8 +19,8 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Mathematics",
     "Topic :: Scientific/Engineering :: Physics",
 ]
-# scipy >= 1.11 for sparse.diags_array / block_array; the core needs nothing else
-dependencies = ["numpy>=1.24", "scipy>=1.11"]
+# scipy >= 1.12 for sparse.diags_array; the core needs nothing else
+dependencies = ["numpy>=1.24", "scipy>=1.12"]
 
 [project.urls]
 Repository = "https://github.com/ij264/fem_1d"
