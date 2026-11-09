@@ -1,260 +1,168 @@
 """
-We solve the equation \\rho \\partial_t^2 u - \\partial_x (\\mu \\partial_x u) = f, where \\rho is the density and \\mu is the tension.
-The solution is computed using the finite element method with linear elements.
-f is a source term that is applied to the system.
-The solution is computed over a time interval [0, T] with time step dt.
+Waves on a fixed string: rho u_tt - (mu u_x)_x = 0 on [0, a], u(0) = u(a) = 0.
+
+Spectral elements of degree n on GLL nodes (diagonal mass matrix). For each model
+in MODELS, computes the normal modes, compares them with a fine high-order
+reference solve, and propagates a Gaussian pulse from rest with leapfrog. The
+uniform model is also checked against the exact omega_p = p pi c / a.
+
+fem_1d assembles the stiffness and mass; the eigen solve and time stepping are
+the few lines below.
 """
 
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
 import numpy as np
-from numpy.polynomial.legendre import Legendre
-from tqdm import tqdm
-
-
-def derivative_matrix_gll(xi, n):
-    P = Legendre.basis(n)(xi)
-    diff = xi[:, None] - xi[None, :]
-    np.fill_diagonal(diff, 1.0)
-    D = (P[:, None] / P[None, :]) / diff
-    np.fill_diagonal(D, 0.0)
-    D[0, 0] = -n * (n + 1) / 4
-    D[-1, -1] = n * (n + 1) / 4
-    return D
-
-
-# Reference element: GLL points, weights, derivative matrix
-n = 4  # polynomial degree (n + 1 nodes per element)
-Pn = Legendre.basis(n)
-xi = np.concatenate(([-1.0], np.sort(Pn.deriv().roots().real), [1.0]))
-w = 2.0 / (n * (n + 1) * Pn(xi) ** 2)
-D = derivative_matrix_gll(xi, n)
-
-# Mesh
-a, Ne = 1.0, 10
-xe = np.linspace(0, a, Ne + 1)  # element end points
-he = np.diff(xe)  # element lengths
-x = np.zeros(Ne * n + 1)
-for e in range(Ne):
-    idx = np.arange(e * n, e * n + n + 1)
-    x[idx] = xe[e] + 0.5 * (1 + xi) * he[e]
-
-mu = lambda x: np.ones_like(x)
-# Stiffness matrix K.
-K = np.zeros((Ne * n + 1, Ne * n + 1))
-for e in range(Ne):
-    idx = np.arange(e * n, e * n + n + 1)
-    mu_q = mu(x[idx])  # mu at this element's nodes
-    Ke = np.zeros((n + 1, n + 1))
-    for k in range(n + 1):
-        for l in range(n + 1):
-            for q in range(n + 1):
-                Ke[k, l] += w[q] * mu_q[q] * D[q, k] * D[q, l]
-    Ke *= 2 / he[e]
-    K[np.ix_(idx, idx)] += Ke
-
-# Now construct the mass matrix M.
-rho = lambda x: np.ones_like(x)  # density function
-M = np.zeros((Ne * n + 1, Ne * n + 1))
-for e in range(Ne):
-    idx = np.arange(e * n, e * n + n + 1)
-    rho_q = rho(x[idx])
-    Me = np.diag(w * rho_q) * he[e] / 2
-    M[np.ix_(idx, idx)] += Me
-
-# Apply boundary conditions.
-K_ff = K[1:-1, 1:-1]
-M_ff = M[1:-1, 1:-1]
-x_free = x[1:-1]
-
+from matplotlib.animation import PillowWriter
 from scipy.linalg import eigh
 
-w2, modes = eigh(K_ff, M_ff)
-omega = np.sqrt(w2)
+import fem_1d as fem
+from string_plots import animate, plot_frequencies, plot_frequency_errors, plot_models, plot_modes
 
-# Now we solve the time-dependent problem using the eigenmodes.
-omega_max = omega[-1]
-dt = 0.5 * 2 / omega_max  # half the stability limit 2/omega_max
-T = 3.0  # total time (c = 1, a = 1: 3 transits of the string)
-n_steps = int(T / dt)
+OUT = Path(__file__).parent
 
-# Initial wave.
-U0 = np.exp(-(((x_free - 0.3) / 0.05) ** 2))
-
-# 3. time loop
-A = np.linalg.solve(M_ff, K_ff)
-U_prev = U0 - 0.5 * dt**2 * (A @ U0)
-U_now = U0.copy()
-
-save_every = max(1, n_steps // 200)  # keep about 200 frames
-frames, times = [U0], [0.0]
-for m in tqdm(range(1, n_steps + 1)):
-    U_next = 2 * U_now - U_prev - dt**2 * (A @ U_now)
-    U_prev, U_now = U_now, U_next
-    if m % save_every == 0:
-        frames.append(U_now.copy())
-        times.append(m * dt)
-frames = np.array(frames)
-
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation, PillowWriter
-
-fig, ax = plt.subplots()
-(line,) = ax.plot(x_free, frames[0])
-ax.set_xlim(0, a)
-ax.set_ylim(-1.1, 1.1)
-ax.set_xlabel("x")
-ax.set_ylabel("u")
-title = ax.set_title("")
+ones = lambda x: np.ones_like(x)
 
 
-def update(i):
-    line.set_ydata(frames[i])
-    title.set_text(f"t = {times[i]:.2f}")
-    return line, title
+@dataclass(frozen=True)
+class Model:
+    """A string of length a with tension mu(x), density rho(x) and jumps at interfaces."""
+
+    name: str
+    mu: Callable
+    rho: Callable
+    interfaces: tuple = ()
+    a: float = 1.0
 
 
-anim = FuncAnimation(fig, update, frames=len(frames), interval=30)
-anim.save("string.gif", writer=PillowWriter(fps=30))  # writes a file
-plt.show()  # or view it live
-# ----------------------------------------------------------------------------
-# Plotting
-# ----------------------------------------------------------------------------
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
+# Models: add or edit entries here. List any jumps in mu or rho as interfaces.
+MODELS = [
+    Model("uniform", mu=ones, rho=ones),
+    Model("two-layer", mu=lambda x: np.where(x < 0.5, 1.0, 4.0), rho=ones, interfaces=(0.5,)),  # c = 1 then 2
+    Model("tension gradient", mu=lambda x: 1.0 + 2.0 * x, rho=ones),
+    Model("density bump", mu=ones, rho=lambda x: 1.0 + 2.0 * np.exp(-(((x - 0.6) / 0.1) ** 2))),
+]
 
-INK, INK_2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
-BLUE, ORANGE = "#2a78d6", "#eb6834"
-plt.rcParams.update(
-    {
-        "figure.facecolor": "#fcfcfb",
-        "axes.facecolor": "#fcfcfb",
-        "savefig.facecolor": "#fcfcfb",
-        "font.family": "sans-serif",
-        "font.size": 10,
-        "text.color": INK,
-        "axes.labelcolor": INK_2,
-        "xtick.color": INK_2,
-        "ytick.color": INK_2,
-        "axes.edgecolor": GRID,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "axes.grid": True,
-        "grid.color": GRID,
-        "grid.linewidth": 0.8,
-        "axes.axisbelow": True,
-        "axes.titlelocation": "left",
-        "axes.titleweight": "semibold",
-        "axes.titlesize": 11,
-        "legend.frameon": False,
-        "lines.linewidth": 2,
-        "lines.solid_capstyle": "round",
+# Discretisation
+n = 4  # polynomial degree (n + 1 nodes per element)
+Ne = 10  # number of elements
+n_ref, Ne_ref = 8, 4 * Ne  # reference solve: much finer and higher order
+
+# Time stepping
+T = 3.0  # total time
+n_frames = 200
+
+
+def discretise(model, n, Ne):
+    """Space, stiffness K, lumped mass diagonal m and free-dof mask (both ends fixed)."""
+    mesh = fem.sized_mesh([0.0, *model.interfaces, model.a], drmax=model.a / Ne)
+    space = fem.FunctionSpace.build(mesh, n)
+    K, _ = fem.assemble_system(space, [fem.Term(model.mu, 1, 1)])
+    M, _ = fem.assemble_system(space, [fem.Term(model.rho)])  # diagonal on GLL nodes
+    free = np.ones(space.n_dofs, dtype=bool)
+    free[[0, -1]] = False
+    return space, K, M.diagonal(), free
+
+
+def normal_modes(K, m, free, k=None):
+    """Frequencies and mass-normalised modes: K phi = w^2 diag(m) phi, via m^-1/2 K m^-1/2."""
+    s = 1 / np.sqrt(m[free])
+    B = K.toarray()[np.ix_(free, free)] * s[:, None] * s[None, :]
+    k = int(free.sum()) if k is None else k
+    w2, V = eigh(B, subset_by_index=(0, k - 1))
+    modes = np.zeros((len(m), k))
+    modes[free] = V * s[:, None]
+    return np.sqrt(np.clip(w2, 0, None)), modes
+
+
+def leapfrog(K, m, free, U0, dt, n_steps, save_every):
+    """Central differences for m u_tt + K u = 0 from rest; returns saved times and frames."""
+    Kf, mf = K[free][:, free], m[free]
+    accel = lambda u: -(Kf @ u) / mf
+    u = U0[free].copy()
+    u_prev = u + 0.5 * dt**2 * accel(u)  # zero initial velocity
+    times, frames = [0.0], [U0.copy()]
+    for step in range(1, n_steps + 1):
+        u, u_prev = 2 * u - u_prev + dt**2 * accel(u), u
+        if step % save_every == 0:
+            U = np.zeros_like(U0)
+            U[free] = u
+            times.append(step * dt)
+            frames.append(U)
+    return np.array(times), np.array(frames)
+
+
+def solve(model):
+    space, K, m, free = discretise(model, n, Ne)
+    omega, modes = normal_modes(K, m, free)
+    omega_ref, _ = normal_modes(*discretise(model, n_ref, Ne_ref)[1:], k=len(omega))
+
+    U0 = np.exp(-(((space.x - 0.3) / 0.05) ** 2))
+    U0[~free] = 0.0
+    dt = 0.5 * 2 / omega[-1]  # half the leapfrog stability limit 2 / omega_max
+    n_steps = int(T / dt)
+    times, frames = leapfrog(K, m, free, U0, dt, n_steps, save_every=max(1, n_steps // n_frames))
+    exact = (np.cos(np.outer(times[-1:], omega)) * (modes.T @ (m * U0))) @ modes.T  # modal superposition
+    err = np.abs(frames[-1] - exact[0]).max() / np.abs(U0).max()
+    print(f"{model.name:>17}: omega_1 = {omega[0]:.5f}, dt = {dt:.2e}, "
+          f"leapfrog vs modal at t = {times[-1]:.2f}: {err:.1e}")
+    return {
+        "model": model, "space": space, "omega": omega, "modes": modes, "omega_ref": omega_ref,
+        "times": times, "frames": frames,
     }
-)
 
-c = 1.0  # wave speed sqrt(mu / rho) for the uniform string
-p = np.arange(1, len(omega) + 1)
-omega_exact = p * np.pi * c / a
 
-# Figure 1: eigenfrequencies against the analytic p*pi*c/a.
-fig1, (ax_f, ax_e) = plt.subplots(
-    1, 2, figsize=(10, 4), constrained_layout=True
-)
+def slug(name):
+    return name.replace(" ", "_").replace("-", "_")
 
-ax_f.plot(
-    p, omega_exact, color=INK_2, lw=1.5, ls="--", label=r"Exact $p\pi c/a$"
-)
-ax_f.plot(
-    p,
-    omega,
-    color=BLUE,
-    lw=0,
-    marker="o",
-    ms=6,
-    mec="#fcfcfb",
-    mew=1.5,
-    label="FEM",
-)
-ax_f.set(xlabel="Mode number $p$", ylabel=r"Angular frequency $\omega_p$")
-ax_f.legend(loc="upper left")
 
-rel_err = np.abs(omega - omega_exact) / omega_exact
-ax_e.semilogy(p, rel_err, color=BLUE, marker="o", ms=6, mec="#fcfcfb", mew=1.5)
-ax_e.set(
-    xlabel="Mode number $p$", ylabel=r"$|\omega_p - p\pi c/a|\,/\,(p\pi c/a)$"
-)
-ax_e.grid(True, which="major")
-# Resolved range: modes before the error first exceeds tol.
-tol = 1e-3
-p_res = p[np.argmax(rel_err > tol)] - 1 if (rel_err > tol).any() else p[-1]
-ax_e.axhline(tol, color=INK_2, lw=1, ls=":")
-ax_e.text(p[0], tol * 1.3, f"tolerance {tol:g}", color=INK_2, fontsize=8)
+def main():
+    results = [solve(model) for model in MODELS]
+    names = [r["model"].name for r in results]
 
-# Nodes per wavelength, 2 Ne n / p, on a secondary axis.
-nodes_per_wavelength = lambda q: 2 * Ne * n / np.maximum(q, 1e-9)
-for ax in (ax_f, ax_e):
-    ax.axvspan(p_res + 0.5, p[-1] + 0.5, color=ORANGE, alpha=0.10, lw=0)
-    ax.set_xlim(0.5, p[-1] + 0.5)
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=10))
-    ax.xaxis.set_tick_params(length=0)
-    ax.yaxis.set_tick_params(length=0)
-    top = ax.secondary_xaxis(
-        "top", functions=(nodes_per_wavelength, nodes_per_wavelength)
+    # Comparison across models.
+    rel_errs = [np.abs(r["omega"] - r["omega_ref"]) / r["omega_ref"] for r in results]
+    fig_err = plot_frequency_errors(
+        names, rel_errs,
+        title=f"Error against n={n_ref}, Ne={Ne_ref} reference (model: n={n}, Ne={Ne})",
     )
-    top.set_xlabel("Nodes per wavelength", fontsize=9)
-    top.set_xticks(
-        [
-            t
-            for t in (20, 10, 8, 6, 5, 4, 3)
-            if nodes_per_wavelength(p[0]) >= t >= nodes_per_wavelength(p[-1])
-        ]
+    xx = np.linspace(0.0, MODELS[0].a, 1001)
+    fig_models = plot_models(
+        names, xx,
+        mus=[np.broadcast_to(m.mu(xx), xx.shape) for m in MODELS],
+        rhos=[np.broadcast_to(m.rho(xx), xx.shape) for m in MODELS],
+        xs=[r["space"].x for r in results],
+        modes_list=[r["modes"] for r in results],
+        omegas=[r["omega"] for r in results],
     )
-    top.spines["top"].set_visible(False)
-    top.xaxis.set_tick_params(length=0)
-ax_f.text(
-    p_res + 1,
-    ax_f.get_ylim()[0],
-    "unresolved",
-    color=ORANGE,
-    fontsize=9,
-    va="bottom",
-    fontweight="bold",
-)
-ax_f.set_title("Eigenfrequencies of the fixed string", pad=34)
-ax_e.set_title(f"Relative error (Ne={Ne}, degree {n})", pad=34)
+    fig_err.savefig(OUT / "models_frequency_error.png", dpi=200)
+    fig_models.savefig(OUT / "models.png", dpi=200)
 
-# Figure 2: first four mode shapes (small multiples, shared axes).
-x_full = x
-fig2, axes = plt.subplots(
-    2, 2, figsize=(10, 5.5), sharex=True, sharey=True, constrained_layout=True
-)
-xx = np.linspace(0, a, 400)
-for ax, pi_ in zip(axes.flat, range(1, 5)):
-    u = np.concatenate(([0.0], modes[:, pi_ - 1], [0.0]))
-    exact = np.sin(pi_ * np.pi * xx / a)
-    # mode sign is arbitrary: align with the analytic shape, then match amplitude
-    u *= np.sign(np.dot(np.interp(x_full, xx, exact), u)) / np.abs(u).max()
-    ax.axhline(0, color=GRID, lw=1)
-    ax.plot(xx, exact, color=INK_2, lw=1.5, ls="--", label="Exact")
-    ax.plot(x_full, u, color=BLUE, lw=2, label="FEM")
-    ax.plot(
-        x_full[::n],
-        u[::n],
-        color=BLUE,
-        lw=0,
-        marker="o",
-        ms=5,
-        mec="#fcfcfb",
-        mew=1,
-        label="Element boundaries",
+    # Uniform string: exact frequencies and mode shapes are known.
+    u = results[names.index("uniform")]
+    space, a = u["space"], u["model"].a
+    p = np.arange(1, len(u["omega"]) + 1)
+    fig_f = plot_frequencies(
+        u["omega"], p * np.pi / a,
+        nodes_per_wavelength=lambda q: 2 * Ne * n / q,
+        title=f"(Ne={Ne}, degree {n})",
     )
-    ax.set_title(rf"$p={pi_}$,  $\omega={omega[pi_ - 1]:.4f}$")
-    ax.xaxis.set_tick_params(length=0)
-    ax.yaxis.set_tick_params(length=0)
-for ax in axes[1]:
-    ax.set_xlabel("$x$")
-for ax in axes[:, 0]:
-    ax.set_ylabel("Normalised displacement")
-axes[0, 0].legend(loc="lower right", fontsize=8)
+    fig_m = plot_modes(
+        space.x, u["omega"], u["modes"],
+        exact_shape=lambda q, x: np.sin(q * np.pi * x / a),
+        element_nodes=space.boundary_dofs,
+    )
+    fig_f.savefig(OUT / "string_frequencies.png", dpi=200)
+    fig_m.savefig(OUT / "string_modes.png", dpi=200)
+
+    # One animation per model.
+    ylim = max(np.abs(r["frames"]).max() for r in results) * 1.1
+    for r in results:
+        anim = animate(r["space"].x, r["times"], r["frames"], ylim=(-ylim, ylim))
+        anim.save(OUT / f"string_{slug(r['model'].name)}.gif", writer=PillowWriter(fps=30))
+
 
 if __name__ == "__main__":
-    fig1.savefig("string_frequencies.png", dpi=200)
-    fig2.savefig("string_modes.png", dpi=200)
+    main()
